@@ -36,21 +36,20 @@ extern "C" OB_PREOP_CALLBACK_STATUS PreOperationCallback(
 
 	UNREFERENCED_PARAMETER(RegistrationContext);
 
-	// получаем процесс, над которым проходят манипуляции
+	// getting process, that was touched
 	PEPROCESS Target = (PEPROCESS)OperationInformation->Object;
 
-	// читаем из структуры PEPROCESS имя процесса
+	// reading process name from PEPROCESS 
 	DWORD32 ImageFilename = (DWORD32)Target + 0x16c;
 
 	UCHAR imageName[15];
 
-	// запишем его для удобства рядом
 	RtlCopyMemory(imageName, (const void*)ImageFilename, 15);
 
-	// если имя процесса calc.exe ...
+	// if process name is calc.exe ...
 	if (!strcmp((const char*)imageName, PROCESS_TO_PROTECT)) {
 
-		// берем флаги доступа, с которыми пытаются создать handle, и если там есть PROCESS_TERMINATE, то убираем из них его же
+		// taking access flags, which were used in handle creation, and if it contains PROCESS_TERMINATE - we will remove it
 		if(OperationInformation->Parameters->CreateHandleInformation.OriginalDesiredAccess & PROCESS_TERMINATE) {
 			OperationInformation->Parameters->CreateHandleInformation.DesiredAccess &= ~PROCESS_TERMINATE;
 		}
@@ -70,22 +69,22 @@ extern "C" NTSTATUS DriverEntry(
 	UNREFERENCED_PARAMETER(DriverObject);
 	UNREFERENCED_PARAMETER(RegistryPath);
 	
-	// устанавливаем callback на выгрузку драйвера
+	// setting callback that will be executed on driver unloading
 	DriverObject->DriverUnload = OnUnload;
 
 	OB_CALLBACK_REGISTRATION Registrator;
 	OB_OPERATION_REGISTRATION Operation;
 	REG_CONTEXT RegistrationContext;
 
-	// хотим ставить колбеки на создание хэндлов связанных с процессами
+	// we want to create callbacks that will catch handle creations of processes
 	Operation.ObjectType = PsProcessType;
 	Operation.Operations = OB_OPERATION_HANDLE_CREATE;
 
-	// ставим колбеки, один выполняется ДО операции, другой ПОСЛЕ
+	// placing callbacks, once that will be called BEFORE operation, and another will be called AFTER
 	Operation.PostOperation = PostOperationCallback;
 	Operation.PreOperation = PreOperationCallback;
 
-	// заполняем структуру, которая содержит в себе описание колбеков
+	// filling stucture that holds info about our callbacks
 	Registrator.Version = OB_FLT_REGISTRATION_VERSION;
 	Registrator.OperationRegistrationCount = 1;
 	RtlInitUnicodeString(&Registrator.Altitude, L"XXXXXXX");
