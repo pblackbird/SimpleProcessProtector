@@ -4,19 +4,91 @@
 
 #define PROCESS_TO_PROTECT "calc.exe"
 
-const UCHAR ProhibitedAccessRights[] = {
-	//PROCESS_TERMINATE,
-	PROCESS_VM_READ,
-	PROCESS_VM_OPERATION,
-	PROCESS_VM_WRITE
-};
-
 extern "C" DRIVER_INITIALIZE DriverEntry;
 
-typedef NTSTATUS(*ZwTerminateProcess_t)(HANDLE, ULONG);
+NTSTATUS(*Real_ZwTerminateProcess)(HANDLE Handle, ULONG ExitCode);
+
+void OnImageLoaded(
+	PUNICODE_STRING FullImageName,
+	HANDLE ProcessId,
+	PIMAGE_INFO ImageInfo
+) {
+
+	UNREFERENCED_PARAMETER(FullImageName);
+
+	PEPROCESS process;
+	NTSTATUS result = PsLookupProcessByProcessId((HANDLE)ProcessId, &process);
+
+	if (!NT_SUCCESS(result)) {
+		Log("[!] Error getting process by PID %i!\n", ProcessId);
+		return;
+	}
+
+	PEPROCESS caller = PsGetCurrentProcess();
+
+	UCHAR name[15];
+	GetImageNameFromProcess(caller, name);
+
+	ANSI_STRING str;
+
+	RtlUnicodeStringToAnsiString(&str, FullImageName, TRUE);
+
+	Log("[*] Image %s loaded with base %p into %s!\n", str.Buffer, ImageInfo->ImageBase, name);
+
+	RtlFreeAnsiString(&str);
+}
+
+NTSTATUS MyTerminate(HANDLE Handle, ULONG ExitCode)
+{
+
+	Log("My terminate called for handle %p!\n", Handle);
+
+	PEPROCESS process;
+
+	NTSTATUS status = ObReferenceObjectByHandle(Handle, FILE_READ_DATA, NULL, KernelMode, (PVOID*)& process, NULL);
+
+	if (!NT_SUCCESS(status)) {
+		Log("[!] Error calling ObReferenceObjectByHandle(): %p\n", status);
+		return STATUS_SUCCESS;
+	}
+
+	UCHAR processName[15];
+
+	GetImageNameFromProcess(process, processName);
+
+	if (!strcmp((const char*)processName, PROCESS_TO_PROTECT)) {
+
+		PEPROCESS _tmp = PsGetCurrentProcess();
+		UCHAR tmpImagename[15];
+
+		GetImageNameFromProcess(_tmp, tmpImagename);
+
+		if (!strcmp((const char*)tmpImagename, PROCESS_TO_PROTECT)) {
+			return Real_ZwTerminateProcess(Handle, ExitCode);
+		}
+
+		Log("[*] You tried to kill %s! DIE!\nPerson, who tried to kill: %s\n\n", PROCESS_TO_PROTECT, tmpImagename);
+
+		return STATUS_ACCESS_DENIED;
+	}
+
+	return Real_ZwTerminateProcess(Handle, ExitCode);
+}
+
+SSDT_HookEntry HookedApis[TOTAL_HOOKS];
+
+VOID InitHookTable() {
+
+	SSDT_HookEntry zwTerminateProcess;
+	zwTerminateProcess.FunctionAddress = (DWORD32)ZwTerminateProcess;
+	zwTerminateProcess.HookAddress = (DWORD32)MyTerminate;
+	zwTerminateProcess.OriginalFunctionAddress = (PDWORD32)&Real_ZwTerminateProcess;
+
+	HookedApis[0] = zwTerminateProcess;
+}
 
 extern "C" VOID OnUnload(struct _DRIVER_OBJECT* DriverObject) {
-
+	
 	UNREFERENCED_PARAMETER(DriverObject);
 
 	DbgPrint("Unloading self ...\n");
@@ -29,15 +101,6 @@ extern "C" void PostOperationCallback(
 
 	UNREFERENCED_PARAMETER(RegistrationContext);
 	UNREFERENCED_PARAMETER(OperationInformation);
-}
-
-VOID Log(PCSTR format, ...) {
-	va_list args;
-	va_start(args, format);
-
-	vDbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, format, args);
-
-	va_end(args);
 }
 
 extern "C" OB_PREOP_CALLBACK_STATUS PreOperationCallback(
@@ -66,6 +129,15 @@ extern "C" OB_PREOP_CALLBACK_STATUS PreOperationCallback(
 			UCHAR prohibitedAccess = ProhibitedAccessRights[i];
 
 			if (OperationInformation->Parameters->CreateHandleInformation.OriginalDesiredAccess & prohibitedAccess) {
+
+				PEPROCESS _tmp = PsGetCurrentProcess();
+
+				UCHAR tmpImagename[15];
+
+				GetImageNameFromProcess(_tmp, tmpImagename);
+
+				Log("[*] %s tried to violate the law with action %p!\n", tmpImagename, prohibitedAccess);
+
 				OperationInformation->Parameters->CreateHandleInformation.DesiredAccess &= ~prohibitedAccess;
 			}
 		}
@@ -73,52 +145,7 @@ extern "C" OB_PREOP_CALLBACK_STATUS PreOperationCallback(
 		
 	}
 
-
-
 	return OB_PREOP_SUCCESS;
-}
-
-NTSTATUS(*Real_ZwTerminateProcess)(HANDLE Handle, ULONG ExitCode);
-
-NTSTATUS MyTerminate(HANDLE Handle, ULONG ExitCode)
-{
-
-	Log("My terminate called for handle %p!\n", Handle);
-
-	//if(Handle <= 0) {
-	//	return STATUS_INVALID_HANDLE;
-	//}
-
-	PEPROCESS process;
-
-	NTSTATUS status = ObReferenceObjectByHandle(Handle, FILE_READ_DATA, NULL, KernelMode, (PVOID*)&process, NULL);
-
-	if(!NT_SUCCESS(status)) {
-		Log("[!] Error calling ObReferenceObjectByHandle(): %p\n", status);
-		return STATUS_SUCCESS;
-	}
-
-	UCHAR processName[15];
-
-	GetImageNameFromProcess(process, processName);
-
-	if(!strcmp((const char*)processName, PROCESS_TO_PROTECT)) {
-
-		PEPROCESS _tmp = PsGetCurrentProcess();
-		UCHAR tmpImagename[15];
-
-		GetImageNameFromProcess(_tmp, tmpImagename);
-
-		if(!strcmp((const char*)tmpImagename, PROCESS_TO_PROTECT)) {
-			return Real_ZwTerminateProcess(Handle, ExitCode);
-		}
-
-		Log("[*] You tried to kill %s! DIE!\nPerson, who tried to kill: %s\n\n", PROCESS_TO_PROTECT, tmpImagename);
-
-		return STATUS_ACCESS_DENIED;
-	}
-
-	return Real_ZwTerminateProcess(Handle, ExitCode);
 }
 
 
@@ -136,7 +163,20 @@ extern "C" NTSTATUS DriverEntry(
 	DriverObject->DriverUnload = OnUnload;
 
 	InitSSDTHooker();
-	Real_ZwTerminateProcess = (ZwTerminateProcess_t)HookSSDT((DWORD32)ZwTerminateProcess, (DWORD32)MyTerminate);
+	InitHookTable();
+
+	//PsSetCreateProcessNotifyRoutine(OnProcessCreated, FALSE);
+	PsSetLoadImageNotifyRoutine(OnImageLoaded);
+
+	// making hook for each HookedApi entry
+	for (int i = 0; i < TOTAL_HOOKS; i++) {
+
+		SSDT_HookEntry entry = HookedApis[i];
+
+		Log("[*] Hooking %p to the %p\n", entry.FunctionAddress, entry.HookAddress);
+
+		*entry.OriginalFunctionAddress = HookSSDT((DWORD32)entry.FunctionAddress, (DWORD32)entry.HookAddress);
+	}
 
 	HANDLE regHandle;
 

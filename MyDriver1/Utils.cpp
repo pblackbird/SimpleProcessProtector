@@ -7,6 +7,15 @@ VOID GetImageNameFromProcess(_In_ PEPROCESS Target, _Out_ UCHAR* output) {
 	RtlCopyMemory(output, (const void*)ImageFilename, 15);
 }
 
+VOID Log(PCSTR format, ...) {
+	va_list args;
+	va_start(args, format);
+
+	vDbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, format, args);
+
+	va_end(args);
+}
+
 NTSTATUS InitObCallbacks(
 	_In_ POB_PRE_OPERATION_CALLBACK preOperation,
 	_In_ POB_POST_OPERATION_CALLBACK postOperation,

@@ -142,7 +142,7 @@
     </ClCompile>
     <Link>
       <EntryPointSymbol>GsDriverEntry@8</EntryPointSymbol>
-      <AdditionalOptions>/integritycheck %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/integritycheck /ignore:4210 %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
